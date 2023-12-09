@@ -1,38 +1,65 @@
 #include <stdio.h>
+#include <string.h>
+
+#include <unistd.h>
+#include <sys/wait.h>
 
 #include "config.h"
 #include "siparse.h"
-#include "utils.h"
+#include "input.h"
+#include "jobs.h"
 
-int
-main(int argc, char *argv[])
+int interactive;
+
+void init()
 {
-	pipelineseq * ln;
-	command *com;
+    signal(SIGCHLD, sigchld_handler);
 
-	char buf[2048];
+    interactive = isatty(STDIN_FILENO);
+    if (interactive) {
 
+        signal(SIGINT, SIG_IGN);
+        signal(SIGQUIT, SIG_IGN);
+        signal(SIGTSTP, SIG_IGN);
+        signal(SIGTTIN, SIG_IGN);
+        signal(SIGTTOU, SIG_IGN);
 
-	while (fgets(buf, 2048, stdin)){	
-		ln = parseline(buf);
-		printparsedline(ln);
-	}
+        pid_t pid = getpid();
+        setpgid(pid, pid);
 
-	return 0;
+        tcsetpgrp(STDIN_FILENO, pid);
 
-	ln = parseline("ls -las | grep k | wc ; echo abc > f1 ;  cat < f2 ; echo abc >> f3\n");
-	printparsedline(ln);
-	printf("\n");
-	com = pickfirstcommand(ln);
-	printcommand(com,1);
+    }
 
-	ln = parseline("sleep 3 &");
-	printparsedline(ln);
-	printf("\n");
-	
-	ln = parseline("echo  & abc >> f3\n");
-	printparsedline(ln);
-	printf("\n");
-	com = pickfirstcommand(ln);
-	printcommand(com,1);
+}
+
+int main(int argc, char* argv[])
+{
+    init();
+    while (1) {
+
+        if (interactive) {
+            print_bg_log();
+            (void) dprintf(STDOUT_FILENO, PROMPT_STR);
+        }
+
+        char* line;
+        ssize_t line_len = readline(&line);
+
+        if (line_len <= 0) return line_len != 0; // Error or EOF
+
+        pipelineseq* seq = line_len <= MAX_LINE_LENGTH ? parseline(line) : NULL;
+        if (seq != NULL) {
+
+            pipelineseq* seq_ptr = seq;
+            do {
+                launch_pipeline(seq_ptr->pipeline);
+            } while ((seq_ptr = seq_ptr->next) != seq);
+
+        } else {
+            (void) dprintf(STDERR_FILENO, SYNTAX_ERROR_STR "\n");
+        }
+
+    }
+
 }
